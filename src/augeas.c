@@ -1738,6 +1738,613 @@ const char *aug_error_minor_message(struct augeas *aug) {
 const char *aug_error_details(struct augeas *aug) {
     return aug->error->details;
 }
+/*
+ *Matching merging functions
+ */
+void process_merge(const augeas *aug, struct treeMatch** processList, void* data){
+    aug_merge_flags flg=(aug_merge_flags)data;
+    struct treeMatch* match =processList[0];
+    struct tree * new=NULL;
+    char *tempLabel=NULL;
+    char *tempValue=NULL;
+    switch(flg){
+        case AUG_MERGE_UNION_MAINTAIN:
+            while(match!=NULL){
+                if(match->loc2!=NULL && match->loc1==NULL){
+                    tree_append(match->parent,tempLabel,tempValue);
+                }
+                match=match->next;
+            }
+            break;
+        case AUG_MERGE_UNION_EXCHANGE:
+            while(match!=NULL){
+                if(match->loc2!=NULL && match->loc1==NULL){
+                    tree_append(match->parent,tempLabel,tempValue);
+                }else if(match->loc1!=NULL && match ->loc2!=NULL){
+                    tree_set_value(match->loc1,match->loc2->value);
+                }
+
+            match=match->next;
+            }
+            break;
+        case AUG_MERGE_INTERSECTION_MAINTAIN:
+            while(match!=NULL){
+                if(match->loc1!=NULL && match->loc2==NULL){
+                       tree_unlink(match->loc1);
+                       match->loc1=NULL;
+                       match->loc2=NULL;
+                }
+                match=match->next;
+            }
+            break;
+        case AUG_MERGE_INTERSECTION_EXCHANGE:
+            while(match!=NULL){
+                if(match->loc1!=NULL && match ->loc2!=NULL){
+                     tree_set_value(match->loc1,match->loc2->value);
+                }else if(match->loc1!=NULL){
+                    tree_unlink(match->loc1);
+                }else{
+                     //we don't care at this case
+                }
+                match=match->next;
+            }
+            break;
+        default:
+            printf("Uknown merging function requested\n");
+            break;
+    }
+    return;
+}
+
+int aug_process_trees(const augeas *aug, const char *dest, void (*process)(const augeas *aug, struct treeMatch ** matches, void* data), void* dataP,char *sources,...){
+    char *tempstr = NULL;
+    struct tree *dstTr=NULL; //clean this?
+    struct tree *srcTr=NULL; //clean this?
+    struct tree *srcCurrent=NULL; //clean this?
+    struct tree *dstCurrent=NULL; //clean this?
+    struct treeChanges *changes=NULL;
+    struct treeMatch **processList=NULL;
+    int r=0;
+    va_list argp;
+    va_start(argp,sources);
+    r = xasprintf(&tempstr, "%s%s", "/files", dest);
+    ERR_NOMEM(r < 0, aug);
+    dstTr=tree_find(aug, tempstr);
+	if(dstTr==NULL)
+        goto error;
+    changes=malloc(sizeof(struct treeChanges));
+    changes->loc=NULL;
+    changes->type=NULL;
+    changes->next=NULL;
+    char* s=sources;
+        while(s != NULL){
+            free(tempstr);
+            tempstr=NULL;
+            r = xasprintf(&tempstr, "%s%s", "/files", s);
+            ERR_NOMEM(r < 0, aug);
+            srcTr=tree_find(aug,tempstr);
+            if(srcTr==NULL  || s==NULL)
+                goto error;
+
+           srcCurrent=srcTr;
+           dstCurrent=dstTr;
+           if (ALLOC_N(processList, 1) < 0) {
+               goto error;
+           }
+           if (ALLOC_N(processList[0], 1) < 0) {
+               goto error;
+           }
+           processList[0]->loc1=dstCurrent;
+           processList[0]->loc2=srcCurrent;
+           processList[0]->parent=NULL;
+           processList[0]->next=NULL;
+           processList=treeMatch_lower_level(aug,processList,changes);
+           while(processList!=NULL){
+               (*process)(aug,processList,dataP);
+                processList=treeMatch_lower_level(aug,processList,changes);
+           }
+
+           s=va_arg(argp,char *);
+        }
+    treeMatch_clear(processList);
+
+    treeChanges_revert(changes);
+
+    r = aug_save(aug);
+    if (r == -1) {
+        printf("saving failed (run 'print /augeas//error' for details)\n");
+    } else {
+        r = aug_match(aug, "/augeas/events/saved", NULL);
+        if (r > 0) {
+            printf("Changes saved in %d file(s)\n", r);
+        }else{
+            printf("No changes\n");
+        }
+    }
+
+    goto cleanup;
+    error:
+            r=-1;
+    cleanup:
+            va_end(argp);
+    if(processList!=NULL)
+        free(processList[0]);
+    free(processList);
+    free(tempstr);
+
+        return r;
+}
+
+struct tree **tree_get_children(struct tree * node){
+    struct tree** pa=NULL;
+    struct tree *temp=NULL;
+    int counter=0;
+    if(NULL==node || NULL==node->children){
+        pa=(struct tree**)malloc(sizeof(struct tree *));
+        pa[0]=malloc(sizeof(struct tree));
+        pa[0]->label="";
+        pa[0]->next=NULL;
+        pa[0]->dirty=1;
+        pa[0]->parent=node;
+        pa[0]->children=NULL;
+        return NULL;
+    }
+    temp=node->children;
+
+    while(temp != NULL){
+        counter++;
+        temp=temp->next;
+    }
+    if (ALLOC_N(pa, counter+1) < 0) {
+        free(pa);
+        return -1;
+    }
+
+    temp=node->children;
+     if (ALLOC_N(pa[0], 1) < 0) {
+        free(pa[0]);
+        return -1;
+    }
+    pa[0]->label="";
+    pa[0]->dirty=counter+1;
+    counter=1;
+    while(temp!=NULL){
+        pa[counter]=temp;
+        counter++;
+        temp=temp->next;
+    }
+    return pa;
+}
+
+int aug_load_file(const augeas *aug,const char *path,char *lens){
+    char *tmp=NULL;
+    int r=0;
+    char *tempstr = NULL;
+    char *tempstr2 = NULL;
+    int status=0;
+    tmp=lens;
+    *tmp=*tmp++;
+    r = xasprintf(&tempstr, "%s%s%s", "/augeas/load/", tmp, "/incl[last()+1]");
+    ERR_NOMEM(r < 0, aug);
+    r=xasprintf(&tempstr2,"%s",path);
+    ERR_NOMEM(r < 0, aug);
+    status = aug_set(aug, tempstr, tempstr2);
+    if (status < 0)
+        goto error;
+    status = aug_load(aug);
+    if (status < 0)
+        goto error;
+
+    free(tempstr);
+    return 0;
+
+    error:
+        free(tempstr);
+        printf("Loading file failed\n");
+    return -1;
+}
+int aug_unload_file(const augeas *aug,char *lens){
+    char *tmp=NULL;
+    int r=0;
+    char *tempstr = NULL;
+    int status=0;
+    tmp=lens;
+    *tmp=*tmp++;
+    r = xasprintf(&tempstr, "%s%s%s", "/augeas/load/", tmp, "/incl[last()]");
+    printf("unload\n");
+    ERR_NOMEM(r < 0, aug);
+    status = aug_rm(aug, tempstr);
+    if (status< 0)
+        goto error;
+    status = aug_load(aug);
+    if (status < 0)
+        goto error;
+
+    free(tempstr);
+    return 0;
+
+    error:
+       printf("Unloading file failed\n");
+       free(tempstr);
+   return -1;
+}
+char* aug_find_lens(const augeas *aug,const char *path){
+    char *tempstr = NULL;
+    char *result=NULL;
+    char *origLensPtr=NULL;//don't free this!
+    char **matches=NULL;
+    int r=0;
+    int cnt=0;
+    r = xasprintf(&tempstr, "%s%s%s", "/augeas/load/*[ '", path, "/' =~ glob(incl) + regexp('/.*') ]/lens");
+    ERR_NOMEM(r < 0, aug);
+    cnt=aug_match(aug,tempstr,&matches);
+    ERR_THROW(cnt==0, aug, AUG_ENOMATCH, "could not locate lens for %s",path);
+    ERR_THROW(cnt>1, aug, AUG_EMMATCH, "found %d lenses for %s",cnt,path);
+    aug_get(aug, matches[0], &origLensPtr);
+    r=xasprintf(&result,"%s",origLensPtr);
+    ERR_NOMEM(r < 0, aug);
+    error:
+        free(tempstr);
+        for(int i=0;i < cnt; i++){
+            free(matches[i]);
+        }
+        free(matches);
+
+        return result;
+}
+
+int label_compare(const void *first, const void *second){
+        struct tree **t1=(struct tree **)first;
+        struct tree **t2=(struct tree **)second;
+        return strcmp((*t1)->label,(*t2)->label);
+}
+
+struct treeMatch** tree_compare_children(const augeas *aug,struct tree **first,struct tree **second,struct tree* parent){
+    struct tree** ft=NULL;
+    struct tree** st=NULL;
+    int fl=0;
+    int sl=0;
+    struct treeMatch *lastNode=NULL;
+    if(NULL==first || NULL==second ){
+        printf("can't compare with null\n");
+        return NULL;
+    }
+    ft=first;
+    fl=ft[0]->dirty;
+    st=second;
+    sl=st[0]->dirty;
+    //get the size of the matchlist
+    int counter=0;
+    int f=1;
+    int s=1;
+    int r=0;
+    while(f<fl || s<sl){
+        printf("%d %d %d %d\n",f,fl,s,sl);
+        if(f<fl && s<sl){
+        r=strcmp(ft[f]->label,st[s]->label);
+        }
+
+        if(r<=-1 || s==sl){
+            f++;
+        }else if (r>=1 || f==fl){
+            s++;
+        }else{
+                f++;
+                s++;
+        }
+        counter++;
+    }
+    //fill the matchlist
+    struct treeMatch **matchList=(struct treeMatch**)malloc(counter*sizeof(struct treeMatch*));
+    counter=0;
+    f=1;
+    s=1;
+    r=0;
+    while(f<fl || s<sl){
+        if(f<fl && s<sl){
+        r=strcmp(ft[f]->label,st[s]->label);
+        }
+        matchList[counter]=(struct treeMatch*)malloc(sizeof(struct treeMatch));
+        if(r<=-1 || s==sl){
+            matchList[counter]->loc1=ft[f];
+            matchList[counter]->loc2=NULL;
+            matchList[counter]->parent=parent;
+            matchList[counter]->next=NULL;
+            f++;
+        }else if (r>=1 || f==fl){
+            matchList[counter]->loc1=NULL;
+            matchList[counter]->loc2=st[s];
+            matchList[counter]->parent=parent;
+            matchList[counter]->next=NULL;
+            s++;
+        }else{
+            matchList[counter]->loc1=ft[f];
+            matchList[counter]->loc2=st[s];
+            matchList[counter]->parent=parent;
+            matchList[counter]->next=NULL;
+            f++;
+            s++;
+        }
+        if(lastNode!=NULL){
+                lastNode->next=matchList[counter];
+        }
+        lastNode=matchList[counter];
+        counter++;
+    }
+
+    //DEBUG debug_print_treeMatchArray(matchList);
+    return matchList;
+}
+
+struct treeMatch** treeMatch_combine(const augeas*aug,struct treeMatch ** first, struct treeMatch **second){
+    int flag=0;
+    struct treeMatch **combine=NULL;
+    //check
+    if(first==NULL&&second==NULL){
+        printf("tree_match_combine end with null\n");
+        return combine;
+    }
+    //count
+    struct treeMatch *temp=NULL;
+
+    int counter=0;
+    int l=0;
+    if(first!=NULL){
+        counter++;
+        l++;
+        temp=first[0];
+        while(temp->next!=NULL){
+            counter++;
+            l++;
+            temp=temp->next;
+        }
+    }else{
+        flag=1;
+    }
+     if(second!=NULL){
+        temp=second[0];
+        counter++;
+        while(temp->next!=NULL){
+            counter++;
+            temp=temp->next;
+        }
+
+    }
+    //fill
+    int k=0;
+    int f=0;
+    int s=0;
+    combine=(struct treeMatch**)malloc(counter*sizeof(struct treeMatch*));
+    while(k<counter){
+        if(l>k){
+            combine[k]=first[f];
+            f++;
+        }else{
+            combine[k]=second[s];
+            if(flag==0){
+                combine[k-1]->next=combine[k];
+            }
+            s++;
+        }
+        k++;
+    }
+    //DEBUG    printf("k:%d, l:%d counter:%d\n",k,l,counter);
+    //DEBUG     printf("tree_match_combine end\n");
+    //DEBUG     debug_print_treeMatchArray(combine);
+    return combine;
+}
+
+struct treeMatch** treeMatch_lower_level(const augeas *aug,struct treeMatch ** processList,struct treeChanges *changes){
+    //DEBUG     printf("tree match lower level started\n");
+    struct treeMatch **pa=NULL;
+    struct tree** childContainerLoc1=NULL;
+    struct tree** childContainerLoc2=NULL;
+    if(processList==NULL){
+        return NULL;
+    }
+    struct treeMatch *temp=processList[0];
+    struct treeMatch **matches=NULL;
+    struct treeMatch**tempMatches=NULL;
+    //DEBUG    debug_print_treeMatchArray(processList);
+    while(temp!=NULL){
+        if((temp->loc1!=NULL&&temp->loc1->children!=NULL) || (temp->loc2!=NULL && temp->loc2->children!=NULL)){
+                childContainerLoc1=tree_child_sort_label(aug,temp->loc1,1,changes);
+                childContainerLoc2=tree_child_sort_label(aug,temp->loc2,1,changes);
+                tempMatches=tree_compare_children(aug,childContainerLoc1,childContainerLoc2,temp->loc1);
+                matches=treeMatch_combine(aug,matches,tempMatches);
+                tempMatches=NULL;
+        }
+        temp=temp->next;
+    }
+    pa=matches;
+    //DEBUG    debug_print_treeMatchArray(pa);
+    //DEBUG    printf("tree_match_lower level end\n");
+    return pa;
+}
+
+int treeMatch_clear(struct treeMatch **matches){
+    struct treeMatch *temp=NULL;
+    if(matches==NULL)
+        return -1;
+    struct treeMatch *head=matches[0];
+    while(head!=NULL){
+        temp=head;
+        head=head->next;
+        free(temp);
+    }
+    return 0;
+}
+
+struct tree** tree_child_sort_label(const augeas *aug,struct tree *node,int saveChanges, struct treeChanges *changes){
+   struct tree**pa=tree_get_children(node);
+    if(NULL==pa){
+        return NULL;
+    }
+    // temp pointer
+    struct tree *temp=pa[0];
+   //finding the number of child nodes //siblings of firstchild
+    int counter=temp->dirty;
+    int commentsCounter=0;
+    int nullCounter=0;
+    int index=1;
+    char *tempstr = NULL;
+    int r;
+    //fixing the array comments completion etc
+    while(index<counter){
+        temp=pa[index];
+        if(temp->label==NULL){
+            r = xasprintf(&tempstr, "%c%d%c", '[', nullCounter, ']');
+            ///????ERR_NOMEM(r < 0, aug);
+            treeChanges_add(changes,temp,NULL);
+            temp->label=tempstr;
+            nullCounter++;
+        }else if(strcmp(temp->label,"#comment")==0){
+            r = xasprintf(&tempstr, "%s%c%d%c","#comment",'[', commentsCounter, ']');
+            ///???ERR_NOMEM(r < 0, aug);
+            treeChanges_add(changes,temp,temp->label);
+            temp->label=tempstr;
+            commentsCounter++;
+        }
+        index++;
+    }
+    qsort(pa,counter,sizeof(struct tree *),label_compare);
+    return pa;
+}
+
+int treeChanges_add(struct treeChanges *changes, struct tree *location, char* type){
+    struct treeChanges *temp=changes;
+    struct treeChanges *node=NULL;
+    if(temp!=NULL){
+        while(temp->next!=NULL){
+            temp=temp->next;
+        }
+        node=(struct treeChanges*)(malloc(sizeof(struct treeChanges)));
+        node->loc=location;
+        node->type=type;
+        node->next=NULL;
+        temp->next=node;
+    }
+    return 0;
+}
+
+int treeChanges_revert(struct treeChanges *changes){
+    struct treeChanges *temp=changes;
+    while(temp!=NULL){
+        if(temp->loc!=NULL){
+            free(temp->loc->label);
+            temp->loc->label=temp->type;
+        }
+        temp=temp->next;
+    }
+    return 0;
+}
+
+int treeChanges_clear(struct treeChanges *changes){
+    struct treeChanges *temp=NULL;
+    int counter=0;
+    while(changes!=NULL){
+        temp=changes;
+        changes=changes->next;
+        counter++;
+        free(temp);
+    }
+    printf("cleaned: %d\n",counter);
+
+    return 0;
+}
+
+int aug_merge(const augeas *aug,const char *dst,const aug_merge_flags flags,const char *src){
+    char *lens=NULL;
+    int r=0;
+    lens=aug_find_lens(aug,dst);
+    if(lens!=NULL){
+        printf("\nMerging started\n");
+        printf("->Loading file: %s\n",src);
+        printf("Lense used: %s\n",lens);
+        r=aug_load_file(aug,src,lens);
+        if(r<0)
+            goto error;
+        printf("-->Done.\n");
+        printf("->Processing files.....");
+        r=aug_process_trees(aug,dst,process_merge,(void*)flags,src,NULL);
+        if(r<0)
+            goto error;
+        printf("-->Done.\n");
+    }
+    printf("->Unloading last file loaded under lens: %s.....\n",lens);
+    r=aug_unload_file(aug,lens);
+    if(r<0)
+        goto error;
+    
+    printf("-->Done.\nMerging was successful.\n");
+    free(lens);
+    return 0;
+
+    error:
+         printf("Failed.\n");
+         printf("Merging was not successful.\n");
+         free(lens);
+         return -1;
+}
+
+int debug_print_treeArray(struct tree ** ar){
+    printf("Debug Print Tree Array\n");
+    if(ar==NULL || ar[0]->dirty==1){
+        return -1;
+    }
+    printf("Array:\n");
+    int k=ar[0]->dirty;
+    int l=1;
+    while(l<k){
+        printf("\t->Index: %d label: %s\n",l,ar[l]->label);
+        l++;
+    }
+    printf("End.\n");
+    return 0;
+}
+
+int debug_print_treeMatchArray(struct treeMatch **ar){
+    printf("Debug print TreeMatch Array\n");
+    if(ar==NULL){
+        return -1;
+    }
+    int counter=0;
+    printf("Array:\n");
+    struct treeMatch* lastMatch=ar[0];
+     while(lastMatch!=NULL){
+         printf("\tIndex: %d ",counter);
+            if(lastMatch->loc1==NULL){
+                printf("in 2 %s\n",lastMatch->loc2->label);
+            }else if(lastMatch->loc1==NULL && lastMatch->loc2==NULL){
+                printf("in none \n");
+            }else if(lastMatch->loc2==NULL){
+                printf("in 1 %s\n",lastMatch->loc1->label);
+            }else{
+
+                printf("in both %s  and %s\n",lastMatch->loc1->label,lastMatch->loc2->label);
+            }
+         lastMatch=lastMatch->next;
+         counter++;
+    }
+    printf("End.\n");
+    return 0;
+}
+int debug_print_treeChanges(struct treeChanges *changes){
+    printf("Debug print TreeChanges List\n");
+    if(changes==NULL){
+        return -1;
+    }
+    int counter=0;
+    printf("List:\n");
+    struct treeChanges* temp=changes;
+     while(temp!=NULL){
+         printf("\tIndex: %d type:%c",counter,temp->type);
+         temp=temp->next;
+         counter++;
+    }
+    printf("End.\n");
+    return 0;
+}
 
 /*
  * Local variables:

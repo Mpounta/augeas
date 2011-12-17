@@ -963,6 +963,98 @@ static const struct command_def cmd_insert_def = {
     .help = cmd_ins_help
 };
 
+/*
+ *merging
+ */
+
+static void cmd_merge(struct command *cmd) {
+    char *availableFlags=NULL;
+    int i=0;
+    int type=0;
+    int funct=0;
+    int r=0;
+    aug_merge_flags total=0;
+    //
+    const char *src = arg_value(cmd, "sources");
+    const char *orig = arg_value(cmd, "orig");
+    const char *mflags = arg_value(cmd, "mflags");
+    availableFlags="muie";
+    //check flags
+    for(i=0; i <  strlen(mflags); i++){
+        switch(mflags[i]){
+            case('u'):
+                if(type==0){
+                    type=1;
+                    total+=AUG_MERGE_UNION;
+                }else{
+                    goto wrongparam;
+                }
+                break;
+            case('i'):
+                if(type==0){
+                    type=1;
+                    total+=AUG_MERGE_INTERSECTION;
+                }else{
+                    goto wrongparam;
+                }
+                break;
+            case('m'):
+                if(funct==0){
+                    funct=1;
+                    total+=AUG_MERGE_MAINTAIN;
+                }else{
+                    goto wrongparam;
+                }
+                break;
+            case('e'):
+                if(funct==0){
+                    funct=1;
+                    total+=AUG_MERGE_EXCHANGE;
+                }else{
+                    goto wrongparam;
+                }
+                break;
+            default:
+                    goto wrongparam;
+                break;
+        }
+    }
+    if(type!=1 && funct !=1)
+        goto wrongparam;
+
+
+    r=aug_merge(cmd->aug,orig,total,src);
+
+    if (r < 0){
+        printf("Merging was unsuccessful.\n");
+        return;
+    }
+
+    return;
+
+    wrongparam:
+                printf("Wrong parameters inserted. Please make sure you define the type and the function of the merging\n");
+    return;
+};
+
+static const struct command_opt_def cmd_merge_opts[] = {
+     { .type = CMD_STR, .name = "mflags", .optional = false,
+	  .help = "the flags for the merging procedure." },
+     { .type = CMD_STR, .name = "orig", .optional = false,
+      .help = "the original file on which changes will be merged" },
+    { .type = CMD_STR, .name = "sources", .optional = false,
+      .help = "the files which contain the changes" },
+    CMD_OPT_DEF_LAST
+};
+
+static const struct command_def cmd_merge_def = {
+    .name = "merge",
+    .opts = cmd_merge_opts,
+    .handler = cmd_merge,
+    .synopsis = "merge two files",
+    .help = "Help of merge command."
+};
+
 static const struct command_def const *commands[] = {
     &cmd_quit_def,
     &cmd_clear_def,
@@ -976,6 +1068,7 @@ static const struct command_def const *commands[] = {
     &cmd_match_def,
     &cmd_mv_def,
     &cmd_move_def,
+    &cmd_merge_def,
     &cmd_print_def,
     &cmd_dump_xml_def,
     &cmd_rm_def,

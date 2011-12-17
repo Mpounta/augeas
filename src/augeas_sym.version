@@ -8,6 +8,7 @@ AUGEAS_0.1.0 {
       aug_rm;
       aug_mv;
       aug_match;
+      aug_merge;
       aug_save;
       aug_print;
       # Symbols with __ are private

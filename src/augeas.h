@@ -381,6 +381,192 @@ const char *aug_error_minor_message(augeas *aug);
  * occurred. The returned value can only be used until the next API call
  */
 const char *aug_error_details(augeas *aug);
+
+/*
+ * Merging matching functions
+ */
+
+/*
+ * Struct to retaing the information that occurred from trying to match 
+ * two trees
+ */
+struct treeMatch {
+    struct tree *loc1;
+    struct tree *loc2;
+    struct tree *parent;
+    struct treeMatch *next;
+};
+/*
+ * Struct to retain temp changes that must be done in a tree in order
+ * to complete the matching algorithm, this struct is then used to 
+ * return those that needed in the original status
+ */
+struct treeChanges {
+    struct tree *loc;
+    char* type;
+    struct treeChanges *next;
+};
+/*
+ * Enum: aug_flags
+ *
+ * Flags to define the merging orientation etc
+ *
+*/
+typedef enum {
+AUG_MERGE_UNION=1,
+AUG_MERGE_INTERSECTION=6,
+AUG_MERGE_MAINTAIN=2,
+AUG_MERGE_EXCHANGE=4,
+AUG_MERGE_UNION_MAINTAIN=3, /* Union Merging  Keep values from original*/
+AUG_MERGE_UNION_EXCHANGE=5, /* Union Merging  Exchange values from original*/
+AUG_MERGE_INTERSECTION_MAINTAIN=8, /* Intersection Merging  Keep values from original*/
+AUG_MERGE_INTERSECTION_EXCHANGE=10 /* Intersection Merging   Exchange values from original*/
+}aug_merge_flags ;
+
+/* Function: aug_find_lense
+ *
+ * Finds the lense used for loading the file given as path
+ * to Augeas tree
+ *
+ * Returns:
+ * The lense name, or null if the detection was not possible
+ */
+char* aug_find_lense(const augeas *aug,const char *path);
+
+/*
+ * Function: aug_parse_tree
+ *
+ * Parsing several trees in order to find a match
+ *
+ * Returns:
+ * - if match found
+ * -1 in faile
+ */
+int aug_process_trees(const augeas *aug, const char *dest, void (*process)(const augeas *aug, struct treeMatch **matches, void* data), void* data,char *sources,...);
+
+ /*
+ * Function: aug_merge
+ *
+  * Merging two files given as real paths (example: /etc/sysconfig/clock)
+ * Accepting as parameters the dest which is the original file in augeas trees,
+  * src the file which contains the changes and flags to define the merging procedure
+ *
+  * Returns:
+  * 0 succeed
+  * -1 in fail
+ */
+int aug_merge(const augeas *aug,const char *dst,const aug_merge_flags flags,const char *src);
+
+/*
+ * Function: aug_load_file
+ *
+ * Loading a file given as as a real path, to the augeas tree, given the lens
+ * 
+ */
+int aug_load_file(const augeas *aug,const char *path,char *lens);
+
+/*
+* Function: aug_unload_file
+* 
+* Unloading a file given as as a real path, to the augeas tree, given the lens
+*
+*/
+int aug_unload_file(const augeas *aug,char *lens);
+
+/*
+ * Function: tree_get_children
+ * 
+ * returning pointers to all the child nodes, that can be found under the node
+ * param
+*/
+struct tree **tree_get_children(struct tree * node);
+
+/*
+ * Function: tree_child_sort_label
+ * 
+ * returning an array with the pointers of a tree children sorted by label
+ *
+ */
+struct tree** tree_child_sort_label(const augeas *aug,struct tree *firstchild,int saveChanges,struct treeChanges*);
+
+/*
+ * Function: tree_compare_children
+ * 
+ * returning a list of treeMatch structs after the matching
+ *
+ */
+struct treeMatch** tree_compare_children(const augeas *aug,struct tree **first,struct tree **second,struct tree* parent);
+
+/* 
+ * Function: tree_get_first_child_of_level
+ * 
+ * gets the first child if exist of all siblings in the same level,otherwise return null
+ *
+*/
+struct tree *tree_get_first_child_of_level(const augeas *aug,struct tree * levelAbove);
+
+/*
+ * Function treeMatch_lower_level
+ * 
+ * function matching the lower level of the nodes that can be found in the treeMatch given
+ * as a param. All changes are be kept in treeChanges struct
+ * 
+*/
+struct treeMatch** treeMatch_lower_level(const augeas *aug,struct treeMatch ** processList,struct treeChanges *changes);
+
+/*
+ * Function: treeChanges_add
+ * 
+ * adding a speficic change to the treeChanges struct
+ */
+int treeChanges_add(struct treeChanges *changes, struct tree *location, char* type);
+
+/*
+ * Function: treeChanges_clear
+ * 
+ * clearing the treeChanges struct
+ */
+int treeChanges_clear(struct treeChanges *changes);
+
+/*
+ * Function treeChanges_revert
+ * 
+ * reverting all the changes that are temporary done,
+ * in order for the matching to work
+ */
+int treeChanges_revert(struct treeChanges *changes);
+
+/*
+ * Function: debug_print_treeArray
+ * 
+ * simple debugging function, printing the tree information
+ * 
+ */
+int debug_print_treeArray(struct tree ** ar);
+
+/*
+ * Function: debug_print_treeMatchArray
+ * 
+ * simple debugging function, printing the tree information
+ * 
+ */
+int debug_print_treeMatchArray(struct treeMatch **ar);
+
+/*
+ * Function: debug_print_treeChanges
+ * 
+ * simple debugging function, printing the tree information
+ * 
+ */
+int debug_print_treeChanges(struct treeChanges *changes);
+
+/*
+ * Function: label_compare
+ * 
+ * function comparing two strings, needed by the sort function
+ * 
+ */
+int label_compare(const void *first, const void *second);
 #endif
 
 

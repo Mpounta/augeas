@@ -197,8 +197,7 @@ module Shellvars =
                      . incl "/etc/environment"
                      . incl "/etc/blkid.conf"
 
-  let filter = filter_sysconfig
-             . filter_ifcfg
+  let filter = filter_ifcfg
              . filter_default
              . filter_misc
              . Util.stdexcl
